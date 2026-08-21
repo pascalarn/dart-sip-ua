@@ -2736,7 +2736,21 @@ class RTCSession extends EventManager implements Owner {
       sendRequest(SipMethod.ACK);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      //
+      // FIX: this used to read `if (succeeded != null)`. `succeeded` is a
+      // non-nullable `bool`, so that condition was ALWAYS true and this
+      // function returned right after the ACK -- on the FIRST 200 OK, not just
+      // on retransmissions. Consequences: the SDP answer was never applied
+      // (`setRemoteDescription` below is unreachable) and `EventSucceeded` was
+      // never emitted.
+      //
+      // That breaks every re-INVITE, and an ICE restart most visibly: the
+      // local side restarts ICE, the remote answer with the peer's new
+      // ufrag/pwd and candidates is thrown away, so ICE can never complete
+      // again. A working call is torn down and cannot recover.
+      //
+      // Leftover from the JsSIP port, where `succeeded` starts out `undefined`.
+      if (succeeded) {
         return;
       }
 
@@ -3011,7 +3025,21 @@ class RTCSession extends EventManager implements Owner {
       _handleSessionTimersInIncomingResponse(response);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      //
+      // FIX: this used to read `if (succeeded != null)`. `succeeded` is a
+      // non-nullable `bool`, so that condition was ALWAYS true and this
+      // function returned right after the ACK -- on the FIRST 200 OK, not just
+      // on retransmissions. Consequences: the SDP answer was never applied
+      // (`setRemoteDescription` below is unreachable) and `EventSucceeded` was
+      // never emitted.
+      //
+      // That breaks every re-INVITE, and an ICE restart most visibly: the
+      // local side restarts ICE, the remote answer with the peer's new
+      // ufrag/pwd and candidates is thrown away, so ICE can never complete
+      // again. A working call is torn down and cannot recover.
+      //
+      // Leftover from the JsSIP port, where `succeeded` starts out `undefined`.
+      if (succeeded) {
         return;
       }
 
