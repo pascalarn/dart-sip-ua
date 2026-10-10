@@ -1164,7 +1164,7 @@ class RTCSession extends EventManager implements Owner {
       {Map<String, dynamic>? options,
       bool useUpdate = false,
       Function(IncomingMessage?)? done,
-      Function(dynamic response)? failed}) {
+      Function(dynamic response, String? reason)? failed}) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
@@ -1217,10 +1217,11 @@ class RTCSession extends EventManager implements Owner {
       // EventCallFailed on the session itself: SIPUAHelper maps that to
       // CallStateEnum.FAILED and the app would tear the call down.
       final dynamic response = event.response;
+      final String? reason = event.cause?.reason_phrase;
       logger.w('renegotiation failed '
-          '(${response is IncomingResponse ? '${response.status_code} ${response.reason_phrase}' : 'no response'})'
-          ' -- session kept');
-      if (failed != null) failed(response);
+          '(${response is IncomingResponse ? '${response.status_code} ${response.reason_phrase}' : 'no response'}'
+          '${reason != null ? ', $reason' : ''}) -- session kept');
+      if (failed != null) failed(response, reason);
     });
     _setLocalMediaStatus();
 
@@ -2737,8 +2738,17 @@ class RTCSession extends EventManager implements Owner {
           'Session-Expires: ${_sessionTimers.currentExpires};refresher=${_sessionTimers.refresher ? 'uac' : 'uas'}');
     }
 
-    void onFailed([dynamic response]) {
-      eventHandlers.emit(EventCallFailed(session: this, response: response));
+    // FIX: carry WHY the renegotiation failed. Several branches below used
+    // to call onFailed() without anything, which made "2xx without SDP",
+    // "wrong Content-Type", "setRemoteDescription rejected the answer" and
+    // "could not create the offer" indistinguishable from "no response".
+    void onFailed([dynamic response, String? reason]) {
+      eventHandlers.emit(EventCallFailed(
+          session: this,
+          response: response,
+          cause: reason == null
+              ? null
+              : ErrorCause(cause: 'renegotiation', reason_phrase: reason)));
     }
 
     void onSucceeded(IncomingResponse? response) async {
@@ -2772,10 +2782,11 @@ class RTCSession extends EventManager implements Owner {
 
       // Must have SDP answer.
       if (response!.body == null || response.body!.isEmpty) {
-        onFailed();
+        onFailed(response, '2xx without SDP');
         return;
       } else if (response.getHeader('Content-Type') != 'application/sdp') {
-        onFailed();
+        onFailed(response,
+            'unexpected Content-Type ${response.getHeader('Content-Type')}');
         return;
       }
 
@@ -2793,7 +2804,7 @@ class RTCSession extends EventManager implements Owner {
         await _connection!.setRemoteDescription(answer);
         eventHandlers.emit(EventSucceeded(response: response));
       } catch (error) {
-        onFailed();
+        onFailed(response, 'setRemoteDescription: $error');
         logger.e(
             'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
         emit(EventSetRemoteDescriptionFailed(exception: error));
@@ -2845,7 +2856,7 @@ class RTCSession extends EventManager implements Owner {
       });
     } catch (e, s) {
       logger.e(e.toString(), error: e, stackTrace: s);
-      onFailed();
+      onFailed(null, 'creating the offer: $e');
     }
   }
 
