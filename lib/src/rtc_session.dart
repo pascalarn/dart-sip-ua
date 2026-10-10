@@ -1163,7 +1163,8 @@ class RTCSession extends EventManager implements Owner {
   bool renegotiate(
       {Map<String, dynamic>? options,
       bool useUpdate = false,
-      Function(IncomingMessage?)? done}) {
+      Function(IncomingMessage?)? done,
+      Function(dynamic response)? failed}) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
@@ -1203,11 +1204,23 @@ class RTCSession extends EventManager implements Owner {
     });
 
     handlers.on(EventCallFailed(), (EventCallFailed event) {
-      terminate(<String, dynamic>{
-        'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
-        'status_code': 500,
-        'reason_phrase': 'Media Renegotiation Failed'
-      });
+      // FIX: a failed renegotiation used to terminate the whole session.
+      // RFC 3261 14.1: if a re-INVITE fails (non-2xx final response), the
+      // session parameters are unchanged and the session continues as before
+      // -- exactly what a client recovering from a network change needs
+      // when the peer answers its ICE-restart offer with e.g. 491 or 500.
+      // 408/481 (dialog gone) still end the session via onDialogError, and a
+      // lost transaction via onRequestTimeout.
+      //
+      // The local description stays an unanswered offer; a later
+      // renegotiate() simply creates a new one. Deliberately no
+      // EventCallFailed on the session itself: SIPUAHelper maps that to
+      // CallStateEnum.FAILED and the app would tear the call down.
+      final dynamic response = event.response;
+      logger.w('renegotiation failed '
+          '(${response is IncomingResponse ? '${response.status_code} ${response.reason_phrase}' : 'no response'})'
+          ' -- session kept');
+      if (failed != null) failed(response);
     });
     _setLocalMediaStatus();
 
