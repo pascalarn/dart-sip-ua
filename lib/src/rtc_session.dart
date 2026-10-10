@@ -2804,7 +2804,19 @@ class RTCSession extends EventManager implements Owner {
         onFailed(event.response);
       });
       handlers.on(EventOnTransportError(), (EventOnTransportError event) {
-        onTransportError(); // Do nothing because session ends.
+        // FIX: a transport error on a re-INVITE used to terminate the whole
+        // session. The transport error here almost always means the
+        // signalling connection was torn down while the re-INVITE was in
+        // flight -- typically on purpose, by a client that rebuilds its
+        // WebSocket after a network change (WLAN -> mobile) and then wants
+        // to retry the ICE restart over the new connection. The dialog and
+        // the media are unaffected by a lost re-INVITE transaction.
+        //
+        // Deliberately NOT onFailed(): renegotiate() maps EventCallFailed to
+        // terminate() as well. The client transaction is already TERMINATED
+        // at this point, which clears `uac_pending_reply`, so the caller can
+        // simply send a new offer once the transport is back.
+        logger.w('re-INVITE lost to a transport error -- session kept');
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
         onRequestTimeout(); // Do nothing because session ends.
