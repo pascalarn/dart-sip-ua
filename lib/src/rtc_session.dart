@@ -1792,6 +1792,22 @@ class RTCSession extends EventManager implements Owner {
 
     constraints['offerModifiers'] = null;
 
+    // FIX: an ICE-restart offer must carry candidates of the NEW gathering.
+    // `_iceGatheringState` still says "complete" from the first offer/answer,
+    // so the shortcut at the end of this method returned the local
+    // description right after setLocalDescription() -- before a single new
+    // candidate existed (an ICE restart discards the old ones). Asterisk then
+    // answers without a=ice-ufrag/ice-pwd ("Called with SDP without ice-ufrag
+    // and ice-pwd"), the answer cannot be applied and the restart fails every
+    // time. Seen on device after WLAN -> mobile, 2026-10-11.
+    final dynamic mandatory = constraints['mandatory'];
+    final bool iceRestart = type == SdpType.offer &&
+        mandatory is Map &&
+        mandatory['IceRestart'] == true;
+    if (iceRestart) {
+      _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateNew;
+    }
+
     if (type != SdpType.offer && type != SdpType.answer) {
       completer.completeError(Exceptions.TypeError(
           'createLocalDescription() | invalid type "$type"'));
@@ -1862,7 +1878,14 @@ class RTCSession extends EventManager implements Owner {
            * initiating a call to answer the call waiting will be unacceptable.
            */
           if (ua.configuration.ice_gathering_timeout != 0) {
-            setTimeout(() => ready(), ua.configuration.ice_gathering_timeout);
+            // A restart only needs the candidates of the new interface, the
+            // host ones arrive within milliseconds -- don't make a dropped
+            // call wait the full initial-call timeout.
+            final int timeout =
+                iceRestart && ua.configuration.ice_gathering_timeout > 500
+                    ? 500
+                    : ua.configuration.ice_gathering_timeout;
+            setTimeout(() => ready(), timeout);
           }
         }
       }
@@ -1876,6 +1899,12 @@ class RTCSession extends EventManager implements Owner {
           'emit "peerconnection:setlocaldescriptionfailed" [error:${error.toString()}]');
       emit(EventSetLocalDescriptionFailed(exception: error));
       completer.completeError(error);
+    }
+
+    // Never hang an ICE restart: without any candidate (no network at all)
+    // send what there is after a bounded wait.
+    if (iceRestart) {
+      setTimeout(() => ready(), 3000);
     }
 
     // Resolve right away if 'pc.iceGatheringState' is 'complete'.
